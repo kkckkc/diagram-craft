@@ -5,7 +5,7 @@ import {
   NodePropsForEditing,
   NodePropsForRendering
 } from './diagramNode';
-import { AbstractElement } from './types';
+import { ElementInterface } from './types';
 import { Transform } from '@diagram-craft/geometry/transform';
 import { Box } from '@diagram-craft/geometry/box';
 import { UnitOfWork } from './unitOfWork';
@@ -15,6 +15,7 @@ import { AttachmentConsumer } from './attachment';
 import { DeepReadonly, FlatObject } from '@diagram-craft/utils/types';
 import { PropertyInfo } from '@diagram-craft/main/react-app/toolwindow/ObjectToolWindow/types';
 import { PropPath, PropPathValue } from '@diagram-craft/utils/propertyPath';
+import { assert } from '@diagram-craft/utils/assert';
 
 // eslint-disable-next-line
 type Snapshot = any;
@@ -22,7 +23,7 @@ type Snapshot = any;
 export type ElementPropsForEditing = EdgePropsForEditing | NodePropsForEditing;
 export type ElementPropsForRendering = EdgePropsForRendering | NodePropsForRendering;
 
-export interface DiagramElement extends AbstractElement, AttachmentConsumer {
+export interface DiagramElement extends ElementInterface, AttachmentConsumer {
   invalidate(uow: UnitOfWork): void;
   detach(uow: UnitOfWork): void;
   duplicate(ctx?: DuplicationContext, id?: string | undefined): DiagramElement;
@@ -92,3 +93,13 @@ export const getTopMostNode = (element: DiagramNode): DiagramNode => {
 
 export const isNode = (e: DiagramElement | undefined): e is DiagramNode => !!e && e.type === 'node';
 export const isEdge = (e: DiagramElement | undefined): e is DiagramEdge => !!e && e.type === 'edge';
+
+declare global {
+  interface AssertTypeExtensions {
+    node: (e: DiagramElement) => asserts e is DiagramNode;
+    edge: (e: DiagramElement) => asserts e is DiagramEdge;
+  }
+}
+
+assert.node = (e: DiagramElement): asserts e is DiagramNode => assert.true(isNode(e), 'not node');
+assert.edge = (e: DiagramElement): asserts e is DiagramEdge => assert.true(isEdge(e), 'not edge');
