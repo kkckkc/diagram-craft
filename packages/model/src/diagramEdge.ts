@@ -1,4 +1,4 @@
-import type { DiagramNode, DuplicationContext } from './diagramNode';
+import { DiagramNode, DuplicationContext } from './diagramNode';
 import { LabelNode, Waypoint } from './types';
 import { Point } from '@diagram-craft/geometry/point';
 import { Vector } from '@diagram-craft/geometry/vector';
@@ -8,7 +8,6 @@ import { CubicSegment, LineSegment } from '@diagram-craft/geometry/pathSegment';
 import { Transform } from '@diagram-craft/geometry/transform';
 import { DiagramElement, isEdge, isNode } from './diagramElement';
 import { DiagramEdgeSnapshot, UnitOfWork, UOWTrackable } from './unitOfWork';
-import type { Diagram } from './diagram';
 import { Layer } from './diagramLayer';
 import {
   AnchorEndpoint,
@@ -31,7 +30,8 @@ import { assert } from '@diagram-craft/utils/assert';
 import { DynamicAccessor, PropPath, PropPathValue } from '@diagram-craft/utils/propertyPath';
 import { PropertyInfo } from '@diagram-craft/main/react-app/toolwindow/ObjectToolWindow/types';
 import { getAdjustments } from './diagramLayerRuleTypes';
-import { RegularLayer } from './diagramLayerRegular';
+import { type RegularLayer } from './diagramLayerRegular';
+import { assertRegularLayer } from './diagramLayerUtils';
 
 const isConnected = (endpoint: Endpoint): endpoint is ConnectedEndpoint =>
   endpoint instanceof ConnectedEndpoint;
@@ -67,28 +67,43 @@ export class DiagramEdge extends DiagramElement implements UOWTrackable<DiagramE
   #end: Endpoint;
   #labelNodes?: ReadonlyArray<ResolvedLabelNode>;
 
-  constructor(
+  constructor(id: string, layer: Layer, metadata: ElementMetadata) {
+    super('edge', id, layer, metadata);
+
+    this.#start = new FreeEndpoint({ x: 0, y: 0 });
+    this.#end = new FreeEndpoint({ x: 0, y: 0 });
+  }
+
+  /* Factory ************************************************************************************************* */
+
+  static create(
     id: string,
     start: Endpoint,
     end: Endpoint,
     props: EdgePropsForEditing,
     metadata: ElementMetadata,
     midpoints: ReadonlyArray<Waypoint>,
-    diagram: Diagram,
     layer: Layer
   ) {
-    super('edge', id, diagram, layer, metadata);
-    this.#start = start;
-    this.#end = end;
-    this.#props = props as EdgeProps;
-    this.#waypoints = midpoints;
+    const edge = new DiagramEdge(id, layer, metadata);
+
+    edge.#start = start;
+    edge.#end = end;
+    edge.#props = props as EdgeProps;
+    edge.#waypoints = midpoints;
 
     if (start instanceof ConnectedEndpoint)
-      start.node._addEdge(start instanceof AnchorEndpoint ? start.anchorId : undefined, this);
+      start.node._addEdge(start instanceof AnchorEndpoint ? start.anchorId : undefined, edge);
     if (end instanceof ConnectedEndpoint)
-      end.node._addEdge(end instanceof AnchorEndpoint ? end.anchorId : undefined, this);
+      end.node._addEdge(end instanceof AnchorEndpoint ? end.anchorId : undefined, edge);
 
-    this._metadata.style ??= DefaultStyles.edge.default;
+    const m = edge.metadata;
+    if (!m.style) {
+      m.style = DefaultStyles.edge.default;
+      edge.forceUpdateMetadata(m);
+    }
+
+    return edge;
   }
 
   getDefinition(): EdgeDefinition {
@@ -113,7 +128,7 @@ export class DiagramEdge extends DiagramElement implements UOWTrackable<DiagramE
       dest.push({
         val: accessor.get(styleProps, path) as PropPathValue<EdgeProps, T>,
         type: 'style',
-        id: this._metadata.style
+        id: this.metadata.style
       });
     }
 
@@ -141,7 +156,7 @@ export class DiagramEdge extends DiagramElement implements UOWTrackable<DiagramE
   }
 
   private getPropsSources() {
-    const styleProps = this.diagram.document.styles.getEdgeStyle(this._metadata.style)?.props;
+    const styleProps = this.diagram.document.styles.getEdgeStyle(this.metadata.style)?.props;
 
     const adjustments = getAdjustments(this._activeDiagram, this.id);
     const ruleProps = adjustments.map(([k, v]) => [k, v.props]);
@@ -249,7 +264,7 @@ export class DiagramEdge extends DiagramElement implements UOWTrackable<DiagramE
   get dataForTemplate() {
     return deepMerge(
       {
-        name: this._metadata.name
+        name: this.metadata.name
       },
       this.metadata.data?.customData ?? {},
       ...(this.metadata.data?.data?.map(d => d.data) ?? [])
@@ -262,8 +277,8 @@ export class DiagramEdge extends DiagramElement implements UOWTrackable<DiagramE
       return this.#labelNodes[0].node.name;
     }
 
-    if (!isEmptyString(this._metadata.name)) {
-      this.cache.set('name', this._metadata.name!);
+    if (!isEmptyString(this.metadata.name)) {
+      this.cache.set('name', this.metadata.name!);
       return this.cache.get('name') as string;
     }
 
@@ -441,7 +456,8 @@ export class DiagramEdge extends DiagramElement implements UOWTrackable<DiagramE
 
     this.#labelNodes?.forEach(ln => {
       const layer = ln.node.layer;
-      if (layer instanceof RegularLayer) {
+      if (layer.type === 'regular') {
+        assertRegularLayer(layer);
         const inLayerElements = layer.elements.find(e => e === ln.node);
         if (inLayerElements) {
           layer.removeElement(ln.node, uow);
@@ -519,7 +535,7 @@ export class DiagramEdge extends DiagramElement implements UOWTrackable<DiagramE
       // Check that no children are elements of the layer
       for (const c of this._children) {
         assert.false(
-          c.layer instanceof RegularLayer && !!c.layer.elements.find(e => e === c),
+          c.layer.type === 'regular' && !!(c.layer as RegularLayer).elements.find(e => e === c),
           "Label node doesn't match children - element"
         );
       }
@@ -629,7 +645,7 @@ export class DiagramEdge extends DiagramElement implements UOWTrackable<DiagramE
       id: this.id,
       type: 'edge',
       props: deepClone(this.#props),
-      metadata: deepClone(this._metadata),
+      metadata: deepClone(this.metadata),
       start: this.start.serialize(),
       end: this.end.serialize(),
       waypoints: deepClone(this.waypoints),
@@ -645,7 +661,7 @@ export class DiagramEdge extends DiagramElement implements UOWTrackable<DiagramE
   // TODO: Add assertions for lookups
   restore(snapshot: DiagramEdgeSnapshot, uow: UnitOfWork) {
     this.#props = snapshot.props as EdgeProps;
-    this._highlights = [];
+    this._highlights.clear();
     this.#start = Endpoint.deserialize(snapshot.start, this.diagram.nodeLookup);
     this.#end = Endpoint.deserialize(snapshot.end, this.diagram.nodeLookup);
     this.#waypoints = (snapshot.waypoints ?? []) as Array<Waypoint>;
@@ -664,14 +680,13 @@ export class DiagramEdge extends DiagramElement implements UOWTrackable<DiagramE
   duplicate(ctx?: DuplicationContext, id?: string | undefined) {
     const uow = new UnitOfWork(this.diagram);
 
-    const edge = new DiagramEdge(
+    const edge = DiagramEdge.create(
       id ?? newid(),
       this.start,
       this.end,
       deepClone(this.#props) as EdgeProps,
-      deepClone(this._metadata) as ElementMetadata,
+      deepClone(this.metadata) as ElementMetadata,
       deepClone(this.waypoints) as Array<Waypoint>,
-      this.diagram,
       this.layer
     );
 
@@ -842,7 +857,7 @@ export class DiagramEdge extends DiagramElement implements UOWTrackable<DiagramE
     this.diagram.edgeLookup.delete(this.id);
 
     // Note, need to check if the element is still in the layer to avoid infinite recursion
-    assert.true(this.layer instanceof RegularLayer);
+    assert.true(this.layer.type === 'regular');
     if ((this.layer as RegularLayer).elements.includes(this)) {
       (this.layer as RegularLayer).removeElement(this, uow);
     }

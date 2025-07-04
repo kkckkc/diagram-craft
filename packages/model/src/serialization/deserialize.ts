@@ -75,11 +75,10 @@ export const deserializeDiagramElements = (
         }
       }
 
-      nodeLookup[c.id] = new DiagramNode(
+      nodeLookup[c.id] = DiagramNode.create(
         c.id,
         c.nodeType,
         c.bounds,
-        diagram,
         layer,
         c.props,
         {
@@ -102,7 +101,7 @@ export const deserializeDiagramElements = (
       const startEndpoint = deserializeEndpoint(start, nodeLookup);
       const endEndpoint = deserializeEndpoint(end, nodeLookup);
 
-      const edge = new DiagramEdge(
+      const edge = DiagramEdge.create(
         e.id,
         startEndpoint,
         endEndpoint,
@@ -112,7 +111,6 @@ export const deserializeDiagramElements = (
           ...e.metadata
         },
         (e.waypoints ?? []) as Array<Waypoint>,
-        diagram,
         layer
       );
 

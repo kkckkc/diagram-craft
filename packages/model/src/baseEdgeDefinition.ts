@@ -12,9 +12,9 @@ import { DiagramNode } from './diagramNode';
 import { AnchorEndpoint } from './endpoint';
 import { newid } from '@diagram-craft/utils/id';
 import { deepClone } from '@diagram-craft/utils/object';
-import { assertRegularLayer } from './diagramLayerRegular';
 import { VERIFY_NOT_REACHED } from '@diagram-craft/utils/assert';
 import { RegularLayer } from './diagramLayerRegular';
+import { assertRegularLayer } from './diagramLayerUtils';
 
 export class BaseEdgeDefinition implements EdgeDefinition {
   public readonly name: string;
@@ -51,14 +51,13 @@ export class BaseEdgeDefinition implements EdgeDefinition {
     const anchor = 'c';
 
     // TODO: This requires some work to support dropping on multi-segment edges
-    const newEdge = new DiagramEdge(
+    const newEdge = DiagramEdge.create(
       newid(),
       new AnchorEndpoint(element, anchor),
       edge.end,
       deepClone(edge.editProps) as EdgeProps,
       deepClone(edge.metadata) as ElementMetadata,
       [],
-      edge.diagram,
       edge.layer
     );
     assertRegularLayer(edge.layer);

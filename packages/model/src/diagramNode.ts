@@ -4,7 +4,6 @@ import { Transform } from '@diagram-craft/geometry/transform';
 import { DiagramElement, isEdge, isNode } from './diagramElement';
 import { DiagramNodeSnapshot, UnitOfWork, UOWTrackable } from './unitOfWork';
 import type { DiagramEdge, ResolvedLabelNode } from './diagramEdge';
-import type { Diagram } from './diagram';
 import { Layer } from './diagramLayer';
 import { DefaultStyles, nodeDefaults } from './diagramDefaults';
 import {
@@ -27,7 +26,7 @@ import { DynamicAccessor, PropPath, PropPathValue } from '@diagram-craft/utils/p
 import { PropertyInfo } from '@diagram-craft/main/react-app/toolwindow/ObjectToolWindow/types';
 import { getAdjustments } from './diagramLayerRuleTypes';
 import { toUnitLCS } from '@diagram-craft/geometry/pathListBuilder';
-import { RegularLayer } from './diagramLayerRegular';
+import type { RegularLayer } from './diagramLayerRegular';
 import { transformPathList } from '@diagram-craft/geometry/pathListUtils';
 
 export type DuplicationContext = {
@@ -57,34 +56,66 @@ export class DiagramNode extends DiagramElement implements UOWTrackable<DiagramN
 
   constructor(
     id: string,
+    layer: Layer,
+    // TODO: Remove metadata as a parameter
+    metadata: ElementMetadata,
+    anchorCache?: ReadonlyArray<Anchor>
+  ) {
+    super('node', id, layer, metadata);
+
+    this.#anchors ??= anchorCache;
+
+    // TODO: Fix this
+    this.#nodeType = 'rect';
+    this.#bounds = { x: 0, y: 0, w: 10, h: 10, r: 0 };
+
+    // Note: It is important that this comes last, as it might trigger
+    //       events etc - so important that everything is set up before
+    //       that to avoid flashing of incorrect formatting/style
+    if (!this.#anchors) {
+      this.invalidateAnchors(UnitOfWork.immediate(this.diagram));
+    }
+  }
+
+  /* Factory ************************************************************************************************* */
+
+  static create(
+    id: string,
     nodeType: 'group' | string,
     bounds: Box,
-    diagram: Diagram,
     layer: Layer,
     props: NodePropsForEditing,
     metadata: ElementMetadata,
     text: NodeTexts = { text: '' },
     anchorCache?: ReadonlyArray<Anchor>
   ) {
-    super('node', id, diagram, layer, metadata);
-    this.#bounds = bounds;
-    this.#nodeType = nodeType;
-    this.#text = text;
+    const node = new DiagramNode(id, layer, metadata, anchorCache);
 
-    this.#props = (props ?? {}) as NodeProps;
-    this.#anchors = anchorCache;
+    this.initializeNode(node, nodeType, bounds, props, text);
 
-    this._metadata.style ??=
-      this.nodeType === 'text' ? DefaultStyles.node.text : DefaultStyles.node.default;
+    return node;
+  }
 
-    this._metadata.textStyle ??= DefaultStyles.text.default;
+  protected static initializeNode(
+    node: DiagramNode,
+    nodeType: 'group' | string,
+    bounds: Box,
+    props: NodePropsForEditing,
+    text: NodeTexts = { text: '' }
+  ) {
+    node.#bounds = bounds;
+    node.#nodeType = nodeType;
+    node.#text = text;
 
-    // Note: It is important that this comes last, as it might trigger
-    //       events etc - so important that everything is set up before
-    //       that to avoid flashing of incorrect formatting/style
-    if (!this.#anchors) {
-      this.invalidateAnchors(UnitOfWork.immediate(diagram));
+    node.#props = (props ?? {}) as NodeProps;
+
+    const m = node.metadata;
+    if (!m.style || !m.textStyle) {
+      m.style = node.nodeType === 'text' ? DefaultStyles.node.text : DefaultStyles.node.default;
+      m.textStyle = DefaultStyles.text.default;
+      node.forceUpdateMetadata(m);
     }
+    node._cache?.clear();
   }
 
   getDefinition() {
@@ -148,7 +179,7 @@ export class DiagramNode extends DiagramElement implements UOWTrackable<DiagramN
       dest.push({
         val: accessor.get(styleProps, path) as PropPathValue<NodeProps, T>,
         type: 'style',
-        id: this._metadata.style
+        id: this.metadata.style
       });
     }
 
@@ -156,7 +187,7 @@ export class DiagramNode extends DiagramElement implements UOWTrackable<DiagramN
       dest.push({
         val: accessor.get(textStyleProps, path) as PropPathValue<NodeProps, T>,
         type: 'textStyle',
-        id: this._metadata.textStyle
+        id: this.metadata.textStyle
       });
     }
 
@@ -196,10 +227,10 @@ export class DiagramNode extends DiagramElement implements UOWTrackable<DiagramN
   }
 
   private getPropsSources() {
-    const styleProps = this.diagram.document.styles.getNodeStyle(this._metadata.style)?.props;
+    const styleProps = this.diagram.document.styles.getNodeStyle(this.metadata.style)?.props;
 
     const textStyleProps = this.diagram.document.styles.getTextStyle(
-      this._metadata.textStyle
+      this.metadata.textStyle
     )?.props;
 
     const parentProps: Partial<NodeProps & EdgeProps> = deepClone(
@@ -324,7 +355,7 @@ export class DiagramNode extends DiagramElement implements UOWTrackable<DiagramN
 
     return deepMerge(
       {
-        name: this._metadata.name
+        name: this.metadata.name
       },
       this.metadata.data?.customData ?? {},
       ...(this.metadata.data?.data?.map(d => d.data) ?? [])
@@ -334,8 +365,8 @@ export class DiagramNode extends DiagramElement implements UOWTrackable<DiagramN
   get name() {
     if (this._cache?.has('name')) return this._cache.get('name') as string;
 
-    if (!isEmptyString(this._metadata.name)) {
-      this.cache.set('name', this._metadata.name!);
+    if (!isEmptyString(this.metadata.name)) {
+      this.cache.set('name', this.metadata.name!);
       return this.cache.get('name') as string;
     }
 
@@ -446,7 +477,7 @@ export class DiagramNode extends DiagramElement implements UOWTrackable<DiagramN
       nodeType: this.nodeType,
       bounds: deepClone(this.bounds),
       props: deepClone(this.#props),
-      metadata: deepClone(this._metadata),
+      metadata: deepClone(this.metadata),
       children: this.children.map(c => c.id),
       edges: Object.fromEntries(
         [...this.edges.entries()].map(([k, v]) => [k, v.map(e => ({ id: e.id }))])
@@ -459,10 +490,10 @@ export class DiagramNode extends DiagramElement implements UOWTrackable<DiagramN
   restore(snapshot: DiagramNodeSnapshot, uow: UnitOfWork) {
     this.setBounds(snapshot.bounds, uow);
     this.#props = snapshot.props as NodeProps;
-    this._highlights = [];
+    this._highlights.clear();
     this.#nodeType = snapshot.nodeType;
     this.#text = snapshot.texts;
-    this._metadata = snapshot.metadata;
+    this.forceUpdateMetadata(snapshot.metadata);
 
     this.setChildren(
       snapshot.children.map(c => {
@@ -511,14 +542,13 @@ export class DiagramNode extends DiagramElement implements UOWTrackable<DiagramN
       return context.targetElementsInGroup.get(this.id) as DiagramNode;
     }
 
-    const node = new DiagramNode(
+    const node = DiagramNode.create(
       id ?? newid(),
       this.nodeType,
       deepClone(this.bounds),
-      this.diagram,
       this.layer,
       deepClone(this.#props) as NodeProps,
-      deepClone(this._metadata) as ElementMetadata,
+      deepClone(this.metadata) as ElementMetadata,
       deepClone(this.#text) as NodeTexts,
       this.#anchors
     );
@@ -661,7 +691,7 @@ export class DiagramNode extends DiagramElement implements UOWTrackable<DiagramN
     }
 
     // Note, need to check if the element is still in the layer to avoid infinite recursion
-    assert.true(this.layer instanceof RegularLayer);
+    assert.true(this.layer.type === 'regular');
     if ((this.layer as RegularLayer).elements.includes(this)) {
       (this.layer as RegularLayer).removeElement(this, uow);
     }
