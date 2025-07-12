@@ -54,7 +54,8 @@ export const deserializeDiagramElements = (
   diagram: Diagram,
   layer: Layer,
   nodeLookup?: Record<string, DiagramNode>,
-  edgeLookup?: Record<string, DiagramEdge>
+  edgeLookup?: Record<string, DiagramEdge>,
+  uow?: UnitOfWork
 ) => {
   nodeLookup ??= {};
   edgeLookup ??= {};
@@ -75,11 +76,10 @@ export const deserializeDiagramElements = (
         }
       }
 
-      nodeLookup[c.id] = new DiagramNode(
+      nodeLookup[c.id] = DiagramNode.create(
         c.id,
         c.nodeType,
         c.bounds,
-        diagram,
         layer,
         c.props,
         {
@@ -102,7 +102,7 @@ export const deserializeDiagramElements = (
       const startEndpoint = deserializeEndpoint(start, nodeLookup);
       const endEndpoint = deserializeEndpoint(end, nodeLookup);
 
-      const edge = new DiagramEdge(
+      const edge = DiagramEdge.create(
         e.id,
         startEndpoint,
         endEndpoint,
@@ -112,7 +112,6 @@ export const deserializeDiagramElements = (
           ...e.metadata
         },
         (e.waypoints ?? []) as Array<Waypoint>,
-        diagram,
         layer
       );
 
@@ -137,7 +136,7 @@ export const deserializeDiagramElements = (
   }
 
   // Pass 3: resolve relations
-  const uow = new UnitOfWork(diagram, false, true);
+  uow ??= new UnitOfWork(diagram, false, true);
   for (const n of diagramElements) {
     for (const c of unfoldGroup(n)) {
       const el = c.type === 'node' ? nodeLookup[c.id] : edgeLookup[c.id];

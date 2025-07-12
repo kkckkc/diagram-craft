@@ -17,6 +17,9 @@ import { PropertyInfo } from '@diagram-craft/main/react-app/toolwindow/ObjectToo
 import { PropPath, PropPathValue } from '@diagram-craft/utils/propertyPath';
 import { assert } from '@diagram-craft/utils/assert';
 import type { RegularLayer } from './diagramLayerRegular';
+import { type CRDTMap } from './collaboration/crdt';
+import { WatchableValue } from '@diagram-craft/utils/watchableValue';
+import { CRDTProp } from './collaboration/datatypes/crdtProp';
 
 // eslint-disable-next-line
 type Snapshot = any;
@@ -24,37 +27,62 @@ type Snapshot = any;
 export type ElementPropsForEditing = EdgePropsForEditing | NodePropsForEditing;
 export type ElementPropsForRendering = EdgePropsForRendering | NodePropsForRendering;
 
+export type DiagramElementCRDT = {
+  id: string;
+  type: string;
+  highlights: CRDTMap<Record<string, boolean>>;
+  metadata: ElementMetadata;
+};
+
 export abstract class DiagramElement implements ElementInterface, AttachmentConsumer {
-  readonly type: string;
-  readonly id: string;
   readonly trackableType = 'element';
 
-  protected _children: ReadonlyArray<DiagramElement> = [];
+  // Transient properties
+  protected readonly _crdt: WatchableValue<CRDTMap<DiagramElementCRDT>>;
+
   protected _diagram: Diagram;
 
   // TODO: Is this always a RegularLayer
   protected _layer: Layer;
   protected _activeDiagram: Diagram;
-  protected _metadata: ElementMetadata = {};
   protected _parent?: DiagramElement;
-  protected _highlights: ReadonlyArray<string> = [];
 
   protected _cache: Map<string, unknown> | undefined = undefined;
+
+  // Shared properties
+  protected readonly _metadata: CRDTProp<DiagramElementCRDT, 'metadata'>;
+  protected readonly _highlights: CRDTProp<DiagramElementCRDT, 'highlights'>;
+  protected _children: ReadonlyArray<DiagramElement> = [];
 
   protected constructor(
     type: string,
     id: string,
-    diagram: Diagram,
     layer: Layer,
-    metadata: ElementMetadata
+    crdt?: CRDTMap<DiagramElementCRDT>
   ) {
-    this.type = type;
-    this.id = id;
-    this._diagram = diagram;
+    this._diagram = layer.diagram;
     this._layer = layer;
-    this._activeDiagram = diagram;
+    this._activeDiagram = this._diagram;
 
-    this._metadata = metadata ?? {};
+    this._crdt = new WatchableValue(crdt ?? this._diagram.document.root.factory.makeMap());
+    this._crdt.get().set('id', id);
+    this._crdt.get().set('type', type);
+
+    this._highlights = new CRDTProp(this._crdt, 'highlights', {
+      factory: () => this._diagram.document.root.factory.makeMap()
+    });
+
+    this._metadata = new CRDTProp(this._crdt, 'metadata', {
+      onChange: type => {
+        if (type !== 'remote') return;
+
+        this.invalidate(UnitOfWork.immediate(this._diagram));
+        this._diagram.emit('elementChange', { element: this });
+        this._cache?.clear();
+      }
+    });
+
+    //console.log(id, !!this._metadata.get(), !!this._highlights.get());
   }
 
   abstract getAttachmentsInUse(): Array<string>;
@@ -85,6 +113,22 @@ export abstract class DiagramElement implements ElementInterface, AttachmentCons
 
   abstract snapshot(): Snapshot;
   abstract restore(snapshot: Snapshot, uow: UnitOfWork): void;
+
+  detachCRDT() {
+    this._crdt.set(this._crdt.get().clone());
+  }
+
+  get crdt() {
+    return this._crdt;
+  }
+
+  get id() {
+    return this._crdt.get().get('id')!;
+  }
+
+  get type() {
+    return this._crdt.get().get('type')!;
+  }
 
   /* Flags *************************************************************************************************** */
 
@@ -125,12 +169,15 @@ export abstract class DiagramElement implements ElementInterface, AttachmentCons
   /* Highlights ********************************************************************************************** */
 
   set highlights(highlights: ReadonlyArray<string>) {
-    this._highlights = highlights;
+    this._highlights.getNonNull().clear();
+    highlights.forEach(h => this._highlights.get()!.set(h, true));
     this.diagram.emitAsync('elementHighlighted', { element: this });
   }
 
   get highlights() {
-    return this._highlights;
+    return Array.from(this._highlights.getNonNull().entries())
+      .filter(([, v]) => !!v)
+      .map(([k]) => k);
   }
 
   /* Parent ************************************************************************************************** */
@@ -146,12 +193,18 @@ export abstract class DiagramElement implements ElementInterface, AttachmentCons
   /* Metadata ************************************************************************************************ */
 
   get metadata() {
-    return this._metadata;
+    return this._metadata.get() ?? {};
+  }
+
+  protected forceUpdateMetadata(metadata: ElementMetadata) {
+    this._metadata.set(metadata);
   }
 
   updateMetadata(callback: (props: ElementMetadata) => void, uow: UnitOfWork) {
     uow.snapshot(this);
-    callback(this._metadata);
+    const metadata = this._metadata.get()!;
+    callback(metadata);
+    this._metadata.set(metadata);
     uow.updateElement(this);
     this._cache?.clear();
   }
