@@ -110,3 +110,25 @@ test.describe('VectorBoolean', () => {
     await storybookScreenshotCheck(page, 'vectorboolean', 'curve-overlapping-rect');
   });
 });
+
+test.describe('VectorBooleanDebug', () => {
+  test('Debug', async ({ page }) => {
+    await storybookScreenshotCheck(page, 'vectorbooleandebug', 'debug');
+  });
+
+  test('Debug Quad Curve', async ({ page }) => {
+    await storybookScreenshotCheck(page, 'vectorbooleandebug', 'debug-quad-curve');
+  });
+
+  test('Debug 001', async ({ page }) => {
+    await storybookScreenshotCheck(page, 'vectorbooleandebug', 'debug-001');
+  });
+
+  test('Debug 002', async ({ page }) => {
+    await storybookScreenshotCheck(page, 'vectorbooleandebug', 'debug-002');
+  });
+
+  test('Debug 003', async ({ page }) => {
+    await storybookScreenshotCheck(page, 'vectorbooleandebug', 'debug-003');
+  });
+});
